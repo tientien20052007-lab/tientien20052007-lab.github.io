@@ -320,11 +320,42 @@ function buildTable(f) {
   f.headers = headers; f.rows = rows;
 }
 
+// File .xls xuất từ web thường là trang HTML. Ô có trình đơn thả xuống (<select>) sẽ bị đọc thành
+// chữ của mọi lựa chọn nối liền nhau → thay mỗi <select> bằng lựa chọn đang chọn, <input> bằng giá trị của nó.
+function htmlWithChosenValues(buf) {
+  const u8 = new Uint8Array(buf);
+  let enc = 'utf-8';
+  if (u8[0] === 0xFF && u8[1] === 0xFE) enc = 'utf-16le';
+  else if (u8[0] === 0xFE && u8[1] === 0xFF) enc = 'utf-16be';
+  else {
+    const head = new TextDecoder('latin1').decode(u8.subarray(0, 4096)).replace(/^\xEF\xBB\xBF/, '');
+    if (!/^\s*</.test(head)) return null;
+    const m = head.match(/charset\s*=\s*["']?([\w-]+)/i); if (m) enc = m[1];
+  }
+  let text;
+  try { text = new TextDecoder(enc).decode(u8); } catch { text = new TextDecoder().decode(u8); }
+  if (/<Workbook\b/.test(text) || !/<table\b/i.test(text) || !/<(select|input)\b/i.test(text)) return null;
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  doc.querySelectorAll('select').forEach(sel => {
+    const opts = [...sel.querySelectorAll('option')];
+    let chosen = opts.filter(o => o.hasAttribute('selected'));
+    if (!chosen.length && !sel.multiple && opts.length) chosen = [opts[0]];
+    sel.replaceWith(chosen.map(o => o.textContent.trim()).join(', '));
+  });
+  doc.querySelectorAll('input').forEach(inp => {
+    const t = (inp.getAttribute('type') || 'text').toLowerCase();
+    if (['text', 'number', 'date', 'email', 'tel', 'search', 'url'].includes(t)) inp.replaceWith(inp.getAttribute('value') || '');
+  });
+  return '<!doctype html>' + doc.documentElement.outerHTML;
+}
 async function loadFile(idx, file) {
   try {
     let wb;
     if (/\.(csv|txt|tsv)$/i.test(file.name)) wb = XLSX.read(await file.text(), { type: 'string', raw: true });
-    else wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellNF: true, cellDates: false });
+    else {
+      const buf = await file.arrayBuffer(), html = htmlWithChosenValues(buf);
+      wb = html ? XLSX.read(html, { type: 'string', cellNF: true }) : XLSX.read(buf, { type: 'array', cellNF: true, cellDates: false });
+    }
     setWorkbook(idx, wb, file.name);
   } catch (e) {
     console.error(e);
