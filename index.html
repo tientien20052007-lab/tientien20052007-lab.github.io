@@ -170,7 +170,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 30px}
 
   <section class="card" id="step2" hidden>
     <div class="step-head"><span class="num">2</span><h2>Ghép cột &amp; chọn cột khóa</h2></div>
-    <p class="hint">Cột <b>Khóa</b> dùng để nhận ra cùng một người/dòng ở 2 bảng (VD: Mã SV, CCCD, Email). Có thể chọn nhiều cột khóa, VD <i>Họ tên + Ngày sinh</i>. Các cột tick <b>So sánh</b> sẽ được đối chiếu giá trị.</p>
+    <p class="hint">Cột <b>Khóa</b> dùng để nhận ra cùng một người/dòng ở 2 bảng (VD: Mã SV, CCCD, Email). Có thể chọn nhiều cột khóa, VD <i>Họ tên + Ngày sinh</i>. Các cột tick <b>So sánh</b> sẽ được đối chiếu giá trị. Nếu nhiều dòng có cùng khóa (VD cùng STT), các dòng đó được gộp và tính là 1.</p>
     <div class="tbl-wrap">
       <table class="map">
         <thead><tr><th>Cột bảng 1</th><th>Cột tương ứng ở bảng 2</th><th class="c">Khóa</th><th class="c">So sánh</th><th>Ví dụ giá trị</th></tr></thead>
@@ -182,6 +182,7 @@ footer{color:var(--muted);font-size:12px;text-align:center;padding:10px 0 30px}
       <label><input type="checkbox" id="oCase" checked> Không phân biệt chữ hoa/thường</label>
       <label><input type="checkbox" id="oAccent"> Bỏ qua dấu tiếng Việt</label>
       <label><input type="checkbox" id="oEmpty"> Bỏ qua khi một bên để trống</label>
+      <label title="Các dòng có cùng giá trị khóa được tính là 1 và so sánh theo tập giá trị của cả nhóm"><input type="checkbox" id="oGroup" checked> Gộp các dòng cùng khóa thành 1</label>
       <label>Sai số cho phép với số <input type="number" id="oTol" class="tol" value="0" min="0" step="any"></label>
       <label>Ngày dạng chữ
         <select id="oDate"><option value="dmy">dd/mm/yyyy</option><option value="mdy">mm/dd/yyyy</option></select>
@@ -402,6 +403,7 @@ function readOptions() {
     ignoreCase: $('#oCase').checked,
     ignoreAccent: $('#oAccent').checked,
     skipEmpty: $('#oEmpty').checked,
+    group: $('#oGroup').checked,
     tol: Math.max(0, parseFloat($('#oTol').value) || 0),
     dateOrder: $('#oDate').value
   };
@@ -463,6 +465,13 @@ function same(c1, c2, o) {
   if ((a.k === 'n' && /^0+\d+$/.test(sb)) || (b.k === 'n' && /^0+\d+$/.test(sa)))
     return sa.replace(/^0+/, '') === sb.replace(/^0+/, '');
   return false;
+}
+// So sánh 2 nhóm ô (các dòng cùng khóa): khớp khi mỗi giá trị bên này đều có ở bên kia
+function sameGroup(ca, cb, o) {
+  if (ca.length === 1 && cb.length === 1) return same(ca[0], cb[0], o);
+  const fa = ca.filter(Boolean), fb = cb.filter(Boolean);
+  if (!fa.length || !fb.length) return (!fa.length && !fb.length) || o.skipEmpty;
+  return fa.every(x => fb.some(y => same(x, y, o))) && fb.every(y => fa.some(x => same(x, y, o)));
 }
 function keyPart(cell, o) {
   const n = norm(cell, o);
@@ -616,30 +625,50 @@ function runCompare() {
     return parts.every(p => !p) ? '' : parts.join('␟');
   };
   const kA = A.rows.map(r => keyOf(r, 0)), kB = B.rows.map(r => keyOf(r, 1));
-  const mapB = new Map(), cntA = new Map();
-  kB.forEach((k, j) => { if (k) { if (!mapB.has(k)) mapB.set(k, []); mapB.get(k).push(j); } });
-  kA.forEach(k => { if (k) cntA.set(k, (cntA.get(k) || 0) + 1); });
+  const groupBy = ks => { const g = new Map(); ks.forEach((k, i) => { if (k) { if (!g.has(k)) g.set(k, []); g.get(k).push(i); } }); return g; };
+  const gA = groupBy(kA), gB = groupBy(kB);
+  const emptyA = kA.filter(k => !k).length, emptyB = kB.filter(k => !k).length;
 
-  const items = [], occ = new Map(), usedB = new Uint8Array(B.rows.length), colDiff = new Array(cmps.length).fill(0);
-  let emptyA = 0, emptyB = 0, diffCells = 0;
+  // Mỗi mục: as/bs = danh sách chỉ số dòng ở bảng 1/2 (gộp theo khóa thì có thể nhiều dòng)
+  const items = [], colDiff = new Array(cmps.length).fill(0);
+  let diffCells = 0;
   const dupKeys = new Set();
-  A.rows.forEach((row, i) => {
-    const k = kA[i]; if (!k) { emptyA++; return; }
-    const list = mapB.get(k), n = occ.get(k) || 0; occ.set(k, n + 1);
-    const dup = cntA.get(k) > 1 || (list && list.length > 1);
-    if (dup) dupKeys.add(k);
-    if (list && n < list.length) {
-      const j = list[n]; usedB[j] = 1;
-      const d = [];
-      cmps.forEach((m, c) => { if (!same(row.cells[m.a], B.rows[j].cells[m.b], o)) { d.push(c); colDiff[c]++; } });
-      diffCells += d.length;
-      items.push({ s: d.length ? 'diff' : 'same', a: i, b: j, d, dup });
-    } else items.push({ s: 'onlyA', a: i, b: -1, d: [], dup });
-  });
-  B.rows.forEach((row, j) => {
-    const k = kB[j]; if (!k) { emptyB++; return; }
-    if (!usedB[j]) { const dup = mapB.get(k).length > 1 || cntA.get(k) > 1; if (dup) dupKeys.add(k); items.push({ s: 'onlyB', a: -1, b: j, d: [], dup }); }
-  });
+  const pushPair = (as, bs, dup) => {
+    const d = [];
+    cmps.forEach((m, c) => {
+      if (!sameGroup(as.map(i => A.rows[i].cells[m.a]), bs.map(j => B.rows[j].cells[m.b]), o)) { d.push(c); colDiff[c]++; }
+    });
+    diffCells += d.length;
+    items.push({ s: d.length ? 'diff' : 'same', as, bs, d, dup });
+  };
+  if (o.group) {
+    for (const [k, as] of gA) {
+      const bs = gB.get(k) || [], dup = as.length > 1 || bs.length > 1;
+      if (dup) dupKeys.add(k);
+      if (bs.length) pushPair(as, bs, dup); else items.push({ s: 'onlyA', as, bs, d: [], dup });
+    }
+    for (const [k, bs] of gB) {
+      if (gA.has(k)) continue;
+      const dup = bs.length > 1; if (dup) dupKeys.add(k);
+      items.push({ s: 'onlyB', as: [], bs, d: [], dup });
+    }
+  } else {
+    // Ghép từng dòng: các dòng trùng khóa được ghép theo thứ tự xuất hiện
+    const occ = new Map(), usedB = new Uint8Array(B.rows.length);
+    A.rows.forEach((row, i) => {
+      const k = kA[i]; if (!k) return;
+      const list = gB.get(k), n = occ.get(k) || 0; occ.set(k, n + 1);
+      const dup = gA.get(k).length > 1 || (list && list.length > 1);
+      if (dup) dupKeys.add(k);
+      if (list && n < list.length) { usedB[list[n]] = 1; pushPair([i], [list[n]], dup); }
+      else items.push({ s: 'onlyA', as: [i], bs: [], d: [], dup });
+    });
+    B.rows.forEach((row, j) => {
+      const k = kB[j]; if (!k || usedB[j]) return;
+      const dup = gB.get(k).length > 1 || (gA.get(k) || []).length > 1; if (dup) dupKeys.add(k);
+      items.push({ s: 'onlyB', as: [], bs: [j], d: [], dup });
+    });
+  }
   const count = { all: items.length, same: 0, diff: 0, onlyA: 0, onlyB: 0 };
   items.forEach(it => count[it.s]++);
   state.result = { keys, cmps, items, count, colDiff, diffCells, emptyA, emptyB, dupKeys: dupKeys.size, opts: o };
@@ -651,11 +680,28 @@ function runCompare() {
 
 /* ================= Hiển thị kết quả ================= */
 const STATUS = { same: 'Khớp', diff: 'Sai khác', onlyA: 'Chỉ có ở bảng 1', onlyB: 'Chỉ có ở bảng 2' };
+// Ô đại diện cho cả nhóm dòng cùng khóa: các giá trị khác nhau được nối bằng "; "
+function cellOf(f, idx, col) {
+  if (!idx.length) return null;
+  if (idx.length === 1) return f.rows[idx[0]].cells[col];
+  const seen = new Set(), cells = [];
+  for (const i of idx) { const c = f.rows[i].cells[col]; if (c && !seen.has(c.w)) { seen.add(c.w); cells.push(c); } }
+  if (cells.length <= 1) return cells[0] || null;
+  const w = cells.map(c => c.w).join('; ');
+  return { t: 's', v: w, w };
+}
+const lineNums = (f, idx) => idx.map(i => f.rows[i].n).join(', ');
+function lineText(f, idx) {
+  if (!idx.length) return '–';
+  return idx.length <= 3 ? lineNums(f, idx) : `${f.rows[idx[0]].n}, ${f.rows[idx[1]].n}… (${idx.length} dòng)`;
+}
+const keyCell = (it, m) => it.as.length ? state.files[0].rows[it.as[0]].cells[m.a] : state.files[1].rows[it.bs[0]].cells[m.b];
+const dupLabel = () => state.result.opts.group ? 'đã gộp' : 'trùng khóa';
 function searchText(it) {
   if (it._q != null) return it._q;
   const A = state.files[0], B = state.files[1], parts = [];
-  if (it.a >= 0) A.rows[it.a].cells.forEach(c => c && parts.push(c.w));
-  if (it.b >= 0) B.rows[it.b].cells.forEach(c => c && parts.push(c.w));
+  it.as.forEach(i => A.rows[i].cells.forEach(c => c && parts.push(c.w)));
+  it.bs.forEach(j => B.rows[j].cells.forEach(c => c && parts.push(c.w)));
   return (it._q = noAccent(parts.join(' ').toLowerCase()));
 }
 function filteredItems() {
@@ -670,7 +716,9 @@ function renderResult() {
   const R = state.result, A = state.files[0], B = state.files[1], v = state.view;
   const keyNames = R.keys.map(m => A.headers[m.a]).join(' + ');
   const warns = [];
-  if (R.dupKeys) warns.push(`Có <b>${fmtN(R.dupKeys)}</b> giá trị khóa bị trùng (nhiều dòng cùng khóa “${esc(keyNames)}”). Các dòng trùng được ghép theo thứ tự xuất hiện và gắn nhãn “trùng khóa” — nên chọn thêm cột khóa để phân biệt.`);
+  if (R.dupKeys) warns.push(R.opts.group
+    ? `Có <b>${fmtN(R.dupKeys)}</b> giá trị khóa “${esc(keyNames)}” xuất hiện ở nhiều dòng — các dòng cùng khóa đã được gộp và tính là 1 (gắn nhãn “đã gộp”), so sánh theo tập giá trị của cả nhóm.`
+    : `Có <b>${fmtN(R.dupKeys)}</b> giá trị khóa bị trùng (nhiều dòng cùng khóa “${esc(keyNames)}”). Các dòng trùng được ghép theo thứ tự xuất hiện và gắn nhãn “trùng khóa” — nên chọn thêm cột khóa để phân biệt, hoặc bật “Gộp các dòng cùng khóa thành 1”.`);
   if (R.emptyA || R.emptyB) warns.push(`Bỏ qua ${fmtN(R.emptyA)} dòng ở bảng 1 và ${fmtN(R.emptyB)} dòng ở bảng 2 vì cột khóa để trống.`);
   if (!R.cmps.length) warns.push('Chưa có cột nào được tick <b>So sánh</b> — chỉ kiểm tra dòng có/không có ở mỗi bảng.');
 
@@ -717,13 +765,12 @@ function renderTable() {
     html += `<tr><td colspan="${2 + R.keys.length + showCols.length}" class="empty-state">Không có dòng nào phù hợp.</td></tr>`;
   }
   for (const it of slice) {
-    const ra = it.a >= 0 ? A.rows[it.a] : null, rb = it.b >= 0 ? B.rows[it.b] : null;
-    html += `<tr class="${it.s}"><td><span class="badge ${it.s}">${STATUS[it.s]}</span>${it.dup ? '<span class="badge dup">trùng khóa</span>' : ''}</td>`;
-    html += `<td class="ln">${ra ? ra.n : '–'} / ${rb ? rb.n : '–'}</td>`;
-    html += R.keys.map(m => `<td class="kc">${cellText(ra ? ra.cells[m.a] : rb.cells[m.b])}</td>`).join('');
+    html += `<tr class="${it.s}"><td><span class="badge ${it.s}">${STATUS[it.s]}</span>${it.dup ? `<span class="badge dup">${dupLabel()}</span>` : ''}</td>`;
+    html += `<td class="ln" title="Bảng 1: ${lineNums(A, it.as) || '–'}&#10;Bảng 2: ${lineNums(B, it.bs) || '–'}">${lineText(A, it.as)} / ${lineText(B, it.bs)}</td>`;
+    html += R.keys.map(m => `<td class="kc">${cellText(keyCell(it, m))}</td>`).join('');
     for (const c of showCols) {
       const m = R.cmps[c];
-      const ca = ra ? ra.cells[m.a] : null, cb = rb ? rb.cells[m.b] : null;
+      const ca = cellOf(A, it.as, m.a), cb = cellOf(B, it.bs, m.b);
       if (it.s === 'onlyA') html += `<td class="v">${cellText(ca)}</td>`;
       else if (it.s === 'onlyB') html += `<td class="v">${cellText(cb)}</td>`;
       else if (it.d.includes(c)) {
@@ -767,7 +814,7 @@ function exportXlsx() {
   const A = state.files[0], B = state.files[1];
   const wb = XLSX.utils.book_new();
   const keyH = R.keys.map(m => A.headers[m.a]);
-  const keyVals = it => R.keys.map(m => exportVal(it.a >= 0 ? A.rows[it.a].cells[m.a] : B.rows[it.b].cells[m.b]));
+  const keyVals = it => R.keys.map(m => exportVal(keyCell(it, m)));
   const addSheet = (name, aoa) => {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws['!cols'] = aoa[0].map((_, c) => ({ wch: Math.min(40, Math.max(8, ...aoa.slice(0, 200).map(r => String(r[c] ?? '').length + 2))) }));
@@ -777,25 +824,25 @@ function exportXlsx() {
 
   const sum = [['Trạng thái', 'Dòng bảng 1', 'Dòng bảng 2', ...keyH, 'Cột sai khác',
     ...R.cmps.flatMap(m => [`${A.headers[m.a]} (bảng 1)`, `${B.headers[m.b]} (bảng 2)`])]];
+  // Số dòng: giữ dạng số khi chỉ có 1 dòng, nhiều dòng thì nối bằng dấu phẩy
+  const lines = (f, idx) => idx.length === 1 ? f.rows[idx[0]].n : lineNums(f, idx);
   R.items.forEach(it => {
-    const ra = it.a >= 0 ? A.rows[it.a] : null, rb = it.b >= 0 ? B.rows[it.b] : null;
-    sum.push([STATUS[it.s] + (it.dup ? ' (trùng khóa)' : ''), ra ? ra.n : '', rb ? rb.n : '', ...keyVals(it),
+    sum.push([STATUS[it.s] + (it.dup ? ` (${dupLabel()})` : ''), lines(A, it.as), lines(B, it.bs), ...keyVals(it),
       it.d.map(c => A.headers[R.cmps[c].a]).join(', '),
-      ...R.cmps.flatMap(m => [exportVal(ra && ra.cells[m.a]), exportVal(rb && rb.cells[m.b])])]);
+      ...R.cmps.flatMap(m => [exportVal(cellOf(A, it.as, m.a)), exportVal(cellOf(B, it.bs, m.b))])]);
   });
   addSheet('Tổng hợp', sum);
 
   const det = [[...keyH, 'Cột', 'Giá trị bảng 1', 'Giá trị bảng 2', 'Dòng bảng 1', 'Dòng bảng 2']];
   R.items.forEach(it => {
     if (it.s !== 'diff') return;
-    const ra = A.rows[it.a], rb = B.rows[it.b];
-    it.d.forEach(c => { const m = R.cmps[c]; det.push([...keyVals(it), A.headers[m.a], exportVal(ra.cells[m.a]), exportVal(rb.cells[m.b]), ra.n, rb.n]); });
+    it.d.forEach(c => { const m = R.cmps[c]; det.push([...keyVals(it), A.headers[m.a], exportVal(cellOf(A, it.as, m.a)), exportVal(cellOf(B, it.bs, m.b)), lines(A, it.as), lines(B, it.bs)]); });
   });
   addSheet('Chi tiết sai khác', det);
 
   const only = (f, side) => {
     const aoa = [['Dòng', ...f.headers]];
-    R.items.forEach(it => { if (it.s === side) { const r = f.rows[side === 'onlyA' ? it.a : it.b]; aoa.push([r.n, ...r.cells.map(exportVal)]); } });
+    R.items.forEach(it => { if (it.s === side) (side === 'onlyA' ? it.as : it.bs).forEach(i => { const r = f.rows[i]; aoa.push([r.n, ...r.cells.map(exportVal)]); }); });
     return aoa;
   };
   addSheet('Chỉ có ở bảng 1', only(A, 'onlyA'));
