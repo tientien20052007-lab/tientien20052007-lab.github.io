@@ -63,6 +63,7 @@ input:focus-visible,select:focus-visible,.btn:focus-visible,.drop:focus-within{o
 .file.loaded .drop .fname{color:var(--text);font-weight:600}
 .fopts{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center;margin-top:10px}
 .fopts label{display:flex;align-items:center;gap:6px}
+.fopts label[hidden]{display:none}
 .fopts .hrow{width:72px}
 .fopts select{max-width:180px}
 .finfo{color:var(--muted);font-size:13px}
@@ -256,12 +257,13 @@ function readGrid(ws) {
     if (a.r > maxR) maxR = a.r; if (a.c > maxC) maxC = a.c;
     if (a.r < minR) minR = a.r; if (a.c < minC) minC = a.c;
   }
-  if (maxR < 0) return { grid: [], r0: 0, c0: 0 };
-  const grid = [];
+  if (maxR < 0) return { grid: [], hid: [], r0: 0, c0: 0 };
+  const grid = [], hid = [], rowInfo = ws['!rows'] || [];
   for (let r = minR; r <= maxR; r++) {
     const row = new Array(maxC - minC + 1);
     for (let c = minC; c <= maxC; c++) row[c - minC] = convCell(ws[XLSX.utils.encode_cell({ r, c })]);
     grid.push(row);
+    hid.push(!!(rowInfo[r] && rowInfo[r].hidden)); // dòng bị ẩn trong Excel (VD do bộ lọc)
   }
   // Ô gộp: chép giá trị ô đầu sang các ô còn lại
   (ws['!merges'] || []).forEach(m => {
@@ -271,7 +273,7 @@ function readGrid(ws) {
       for (let c = Math.max(m.s.c, minC); c <= Math.min(m.e.c, maxC); c++)
         if (!(r === m.s.r && c === m.s.c)) grid[r - minR][c - minC] = v;
   });
-  return { grid, r0: minR, c0: minC };
+  return { grid, hid, r0: minR, c0: minC };
 }
 function detectHeader(f) {
   const lim = Math.min(f.grid.length, 30);
@@ -304,12 +306,14 @@ function buildTable(f) {
     cols.push(c); headers.push(name);
   }
   const rows = [];
+  let hiddenRows = 0;
   for (let r = Math.max(hi + 1, 0); r < f.grid.length; r++) {
     const cells = cols.map(c => f.grid[r][c] || null);
     if (cells.every(x => !x)) continue;
+    if (f.hid[r]) { hiddenRows++; if (f.skipHidden !== false) continue; }
     rows.push({ n: f.r0 + r + 1, cells });
   }
-  f.headers = headers; f.rows = rows;
+  f.headers = headers; f.rows = rows; f.hiddenRows = hiddenRows;
 }
 
 // File .xls xuất từ web thường là trang HTML. Ô có trình đơn thả xuống (<select>) sẽ bị đọc thành
@@ -346,7 +350,7 @@ async function loadFile(idx, file) {
     if (/\.(csv|txt|tsv)$/i.test(file.name)) wb = XLSX.read(await file.text(), { type: 'string', raw: true });
     else {
       const buf = await file.arrayBuffer(), html = htmlWithChosenValues(buf);
-      wb = html ? XLSX.read(html, { type: 'string', cellNF: true }) : XLSX.read(buf, { type: 'array', cellNF: true, cellDates: false });
+      wb = html ? XLSX.read(html, { type: 'string', cellNF: true }) : XLSX.read(buf, { type: 'array', cellNF: true, cellDates: false, cellStyles: true }); // cellStyles: để biết dòng nào bị ẩn
     }
     setWorkbook(idx, wb, file.name);
   } catch (e) {
@@ -379,6 +383,7 @@ function fileCardHTML(i) {
     <div class="fopts" hidden>
       <label>Sheet <select class="sheet"></select></label>
       <label title="Số thứ tự dòng chứa tên cột trong Excel">Dòng tiêu đề <input type="number" class="hrow" min="1"></label>
+      <label class="hidopt" hidden title="Các dòng đang bị ẩn trong Excel, thường do bộ lọc"><input type="checkbox" class="skiphid" checked> Bỏ qua <span class="hidn"></span> dòng đang ẩn (do lọc)</label>
       <span class="finfo"></span>
     </div>
     <details class="preview" hidden><summary>Xem trước dữ liệu</summary><div class="pv"></div></details>
@@ -404,6 +409,12 @@ function initFiles() {
       if (!(v >= lo)) v = lo; if (v > hi) v = hi;
       f.headerRow = v; buildTable(f); renderFile(i); structureChanged();
     });
+    $('.skiphid', el).addEventListener('change', e => {
+      const f = state.files[i]; if (!f) return;
+      f.skipHidden = e.target.checked; buildTable(f); renderFile(i);
+      // Cột không đổi nên giữ nguyên cách ghép cột/khóa đã chọn, chỉ so sánh lại
+      if (state.files[0] && state.files[1]) { renderMapping(); runCompare(); }
+    });
   });
 }
 function renderFile(i) {
@@ -413,6 +424,9 @@ function renderFile(i) {
   const opts = $('.fopts', el); opts.hidden = false;
   $('.sheet', el).innerHTML = f.wb.SheetNames.map(s => `<option ${s === f.sheet ? 'selected' : ''}>${esc(s)}</option>`).join('');
   $('.hrow', el).value = f.headerRow;
+  $('.hidopt', el).hidden = !f.hiddenRows;
+  $('.hidn', el).textContent = fmtN(f.hiddenRows);
+  $('.skiphid', el).checked = f.skipHidden !== false;
   $('.finfo', el).textContent = `${fmtN(f.rows.length)} dòng dữ liệu · ${f.headers.length} cột`;
   const pv = $('.preview', el); pv.hidden = !f.headers.length;
   $('.pv', el).innerHTML = `<table><thead><tr><th>Dòng</th>${f.headers.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${
