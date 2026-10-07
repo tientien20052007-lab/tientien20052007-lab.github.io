@@ -97,9 +97,8 @@ table.map input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)
 .summary-line{margin:0 0 12px;color:var(--muted)}
 .summary-line b{color:var(--text)}
 .warn{background:var(--a-bg);color:var(--a);border-radius:8px;padding:8px 12px;margin:0 0 12px;font-size:13px}
-.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
-@media (max-width:900px){.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media (max-width:520px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+@media (max-width:520px){.stats{grid-template-columns:1fr}}
 .stat{font:inherit;text-align:left;color:inherit;background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer;border-left-width:4px}
 .stat:hover{border-color:var(--accent)}
 .stat.active{outline:2px solid var(--accent);outline-offset:-1px}
@@ -109,8 +108,6 @@ table.map input[type=checkbox]{width:17px;height:17px;accent-color:var(--accent)
 .stat.all{border-left-color:var(--accent)}
 .stat.same{border-left-color:var(--ok)} .stat.same .v{color:var(--ok)}
 .stat.diff{border-left-color:var(--bad)} .stat.diff .v{color:var(--bad)}
-.stat.onlyA{border-left-color:var(--a)} .stat.onlyA .v{color:var(--a)}
-.stat.onlyB{border-left-color:var(--b)} .stat.onlyB .v{color:var(--b)}
 .colstats{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:14px;font-size:13px}
 .chip{font:inherit;font-size:13px;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:999px;padding:3px 10px;cursor:pointer}
 .chip b{color:var(--bad);margin-left:4px}
@@ -134,16 +131,11 @@ table.rt td.d .v2::before{content:"2: ";color:var(--muted);font-weight:400}
 table.rt td.d .v1{color:var(--bad);font-weight:600}
 table.rt td.d .v2{color:var(--text)}
 table.rt td.d .em{font-style:italic;opacity:.7}
-table.rt tr.onlyA td.v,table.rt tr.onlyB td.v{color:var(--muted)}
-table.rt tr.onlyA td:first-child{box-shadow:inset 3px 0 var(--a)}
-table.rt tr.onlyB td:first-child{box-shadow:inset 3px 0 var(--b)}
 table.rt tr.diff td:first-child{box-shadow:inset 3px 0 var(--bad)}
 table.rt tr.same td:first-child{box-shadow:inset 3px 0 var(--ok)}
 .badge{display:inline-block;font-size:12px;font-weight:600;padding:1px 8px;border-radius:999px}
 .badge.same{background:var(--ok-bg);color:var(--ok)}
 .badge.diff{background:var(--bad-bg);color:var(--bad)}
-.badge.onlyA{background:var(--a-bg);color:var(--a)}
-.badge.onlyB{background:var(--b-bg);color:var(--b)}
 .badge.dup{background:var(--a-bg);color:var(--a);margin-left:4px}
 .empty-state{padding:30px;text-align:center;color:var(--muted)}
 .pager{display:flex;align-items:center;gap:8px;justify-content:flex-end;flex-wrap:wrap;margin-top:10px;font-size:13px}
@@ -672,35 +664,27 @@ function runCompare() {
     diffCells += d.length;
     items.push({ s: d.length ? 'diff' : 'same', as, bs, d, dup });
   };
+  // Chỉ so sánh các khóa có ở cả 2 bảng; dòng chỉ có ở một bảng được bỏ qua
   if (o.group) {
     for (const [k, as] of gA) {
-      const bs = gB.get(k) || [], dup = as.length > 1 || bs.length > 1;
+      const bs = gB.get(k); if (!bs) continue;
+      const dup = as.length > 1 || bs.length > 1;
       if (dup) dupKeys.add(k);
-      if (bs.length) pushPair(as, bs, dup); else items.push({ s: 'onlyA', as, bs, d: [], dup });
-    }
-    for (const [k, bs] of gB) {
-      if (gA.has(k)) continue;
-      const dup = bs.length > 1; if (dup) dupKeys.add(k);
-      items.push({ s: 'onlyB', as: [], bs, d: [], dup });
+      pushPair(as, bs, dup);
     }
   } else {
     // Ghép từng dòng: các dòng trùng khóa được ghép theo thứ tự xuất hiện
-    const occ = new Map(), usedB = new Uint8Array(B.rows.length);
+    const occ = new Map();
     A.rows.forEach((row, i) => {
-      const k = kA[i]; if (!k) return;
-      const list = gB.get(k), n = occ.get(k) || 0; occ.set(k, n + 1);
-      const dup = gA.get(k).length > 1 || (list && list.length > 1);
+      const k = kA[i], list = k && gB.get(k); if (!list) return;
+      const n = occ.get(k) || 0; occ.set(k, n + 1);
+      if (n >= list.length) return;
+      const dup = gA.get(k).length > 1 || list.length > 1;
       if (dup) dupKeys.add(k);
-      if (list && n < list.length) { usedB[list[n]] = 1; pushPair([i], [list[n]], dup); }
-      else items.push({ s: 'onlyA', as: [i], bs: [], d: [], dup });
-    });
-    B.rows.forEach((row, j) => {
-      const k = kB[j]; if (!k || usedB[j]) return;
-      const dup = gB.get(k).length > 1 || (gA.get(k) || []).length > 1; if (dup) dupKeys.add(k);
-      items.push({ s: 'onlyB', as: [], bs: [j], d: [], dup });
+      pushPair([i], [list[n]], dup);
     });
   }
-  const count = { all: items.length, same: 0, diff: 0, onlyA: 0, onlyB: 0 };
+  const count = { all: items.length, same: 0, diff: 0 };
   items.forEach(it => count[it.s]++);
   state.result = { keys, cmps, items, count, colDiff, diffCells, emptyA, emptyB, dupKeys: dupKeys.size, opts: o };
   if (state.view.col >= cmps.length) state.view.col = -1;
@@ -710,7 +694,7 @@ function runCompare() {
 }
 
 /* ================= Hiển thị kết quả ================= */
-const STATUS = { same: 'Khớp', diff: 'Sai khác', onlyA: 'Chỉ có ở bảng 1', onlyB: 'Chỉ có ở bảng 2' };
+const STATUS = { same: 'Khớp', diff: 'Sai khác' };
 // Ô đại diện cho cả nhóm dòng cùng khóa: các giá trị khác nhau được nối bằng "; "
 function cellOf(f, idx, col) {
   if (!idx.length) return null;
@@ -755,11 +739,9 @@ function renderResult() {
 
   const card = (k, label, val, sub) =>
     `<button type="button" class="stat ${k} ${v.filter === k && v.col < 0 ? 'active' : ''}" data-f="${k}"><div class="k">${label}</div><div class="v">${fmtN(val)}</div><div class="s">${sub}</div></button>`;
-  const stats = card('all', 'Tất cả', R.count.all, `${fmtN(R.count.same + R.count.diff)} cặp ghép được`) +
+  const stats = card('all', 'Tất cả', R.count.all, 'có ở cả 2 bảng') +
     card('same', 'Khớp hoàn toàn', R.count.same, 'mọi cột so sánh đều đúng') +
-    card('diff', 'Có sai khác', R.count.diff, `${fmtN(R.diffCells)} ô khác nhau`) +
-    card('onlyA', 'Chỉ có ở bảng 1', R.count.onlyA, 'bảng 2 không có → không so sánh') +
-    card('onlyB', 'Chỉ có ở bảng 2', R.count.onlyB, 'bảng 1 không có → không so sánh');
+    card('diff', 'Có sai khác', R.count.diff, `${fmtN(R.diffCells)} ô khác nhau`);
 
   const chips = R.cmps.length ? `<span class="muted">Sai khác theo cột:</span>` + R.cmps.map((m, c) =>
     `<button type="button" class="chip ${R.colDiff[c] ? '' : 'zero'} ${v.col === c ? 'active' : ''}" data-c="${c}" ${R.colDiff[c] ? '' : 'disabled'}>${esc(A.headers[m.a])}<b>${fmtN(R.colDiff[c])}</b></button>`).join('') : '';
@@ -802,9 +784,7 @@ function renderTable() {
     for (const c of showCols) {
       const m = R.cmps[c];
       const ca = cellOf(A, it.as, m.a), cb = cellOf(B, it.bs, m.b);
-      if (it.s === 'onlyA') html += `<td class="v">${cellText(ca)}</td>`;
-      else if (it.s === 'onlyB') html += `<td class="v">${cellText(cb)}</td>`;
-      else if (it.d.includes(c)) {
+      if (it.d.includes(c)) {
         html += `<td class="d"><span class="v1">${ca ? esc(ca.w) : '<span class="em">(trống)</span>'}</span><span class="v2">${cb ? esc(cb.w) : '<span class="em">(trống)</span>'}</span></td>`;
       } else {
         const ta = ca ? ca.w : '', tb = cb ? cb.w : '';
@@ -870,14 +850,6 @@ function exportXlsx() {
     it.d.forEach(c => { const m = R.cmps[c]; det.push([...keyVals(it), A.headers[m.a], exportVal(cellOf(A, it.as, m.a)), exportVal(cellOf(B, it.bs, m.b)), lines(A, it.as), lines(B, it.bs)]); });
   });
   addSheet('Chi tiết sai khác', det);
-
-  const only = (f, side) => {
-    const aoa = [['Dòng', ...f.headers]];
-    R.items.forEach(it => { if (it.s === side) (side === 'onlyA' ? it.as : it.bs).forEach(i => { const r = f.rows[i]; aoa.push([r.n, ...r.cells.map(exportVal)]); }); });
-    return aoa;
-  };
-  addSheet('Chỉ có ở bảng 1', only(A, 'onlyA'));
-  addSheet('Chỉ có ở bảng 2', only(B, 'onlyB'));
   XLSX.writeFile(wb, 'ket_qua_so_sanh.xlsx');
 }
 
